@@ -7,7 +7,7 @@ It builds on [Embedding](https://github.com/automatingwithaicos-dev/Embedding), 
 ## Example
 
 ```
-$ python -m agent ask "jsmith says she can't sign in to anything" --trace
+$ uv run run.py ask "jsmith says she can't sign in to anything" --trace
 
   step 1: get_user_status({"username": "jsmith"})
           -> {"locked_out": true, "failed_sign_ins_last_hour": 12, "mfa_methods": ["Microsoft Authenticator"], ...}
@@ -43,33 +43,50 @@ request ──► model decides ──► tool call ──► result back to mod
 
 ## Quick start
 
-You need Python 3.10 or newer and, for local use, Ollama or LM Studio running a model that supports tool calling (qwen2.5, llama3.1, or mistral-nemo). No API key is needed.
+You need [uv](https://docs.astral.sh/uv/) and, for local use, Ollama or LM Studio running a model that supports tool calling (qwen2.5, llama3.1, or mistral-nemo). No API key is needed.
 
-## What to change before you run it
+**1. Install uv** (it installs Python for you, so you don't need to install Python first):
 
-Open `config.ini` in any text editor. Every setting has a comment above it. Most people only change the first three:
+```bash
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Mac or Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen your terminal after installing.
+
+**2. Install the project's dependencies** from the project folder:
+
+```bash
+uv sync
+```
+
+This creates a `.venv` folder with the right Python version and every package locked to tested versions in `uv.lock`.
+
+**Before you run it, edit `config.ini`.**
+
+Open it in any text editor. Every setting has a comment above it. Most people only change the first three:
 
 | Setting | What to put there |
 | --- | --- |
 | `provider` | `local` for a model on your machine, `claude` for the Claude API |
 | `base_url` | Ollama: `http://localhost:11434/v1`. LM Studio: `http://localhost:1234/v1` |
-| `model` | Your model's name exactly as your server lists it. `python run.py check` prints the names |
+| `model` | Your model's name exactly as your server lists it. `uv run run.py check` prints the names |
 | `docs` | The folder of runbooks to search. Change it to use your own `.md` or `.txt` files |
 | `embedding` | `fastembed` for semantic search (one-time 70 MB download) or `tfidf` for keyword search |
 | `max_steps` | Most tool calls the agent can make before it stops and suggests a ticket |
 | `trace` | `true` shows every tool call the agent makes |
 
-Then run these from the project folder:
+**3. Run it:**
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-
-python run.py setup                # install requirements and build the knowledge base index
-python run.py check                # confirm your model server is running and the model name matches
-python run.py ask "jsmith can't sign in"
-python run.py chat                 # interactive mode
-python run.py rag "how do I clear stuck print jobs"   # plain RAG with no tools, for comparison
+uv run run.py setup                # build the knowledge base index
+uv run run.py check                # confirm your model server is running and the model name matches
+uv run run.py ask "jsmith can't sign in"
+uv run run.py chat                 # interactive mode
+uv run run.py rag "how do I clear stuck print jobs"   # plain RAG with no tools, for comparison
 ```
 
 If you change `docs` or `embedding`, delete the `index` folder so it rebuilds on the next run.
@@ -95,7 +112,7 @@ Try these requests with the sample users:
 ## Tests
 
 ```bash
-pytest
+uv run pytest
 ```
 
 The agent tests use a scripted fake model, so they run offline with no API key or local server. They check that tools return the right data and handle bad input, that tool results are passed back to the model with the right IDs, that tickets are created, and that the loop stops at its step limit. The RAG tests check chunking, retrieval, and saving and loading the index.
@@ -104,6 +121,7 @@ The agent tests use a scripted fake model, so they run offline with no API key o
 
 ```
 run.py          one script to set up and run everything
+pyproject.toml  dependencies (uv sync installs them; uv.lock pins exact versions)
 config.ini      your settings: model, server, documents
 agent/
   tools.py      tool definitions and read-only implementations
