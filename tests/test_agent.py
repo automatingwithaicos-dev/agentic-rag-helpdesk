@@ -107,10 +107,10 @@ def test_agent_investigates_then_escalates(tools):
 def test_agent_pushes_back_once_when_model_skips_tools(tools):
     client = FakeClient([
         response([text("jsmith is locked out. Ticket T00123456789.")], "end_turn"),
-        response([tool_use("t1", "get_user_status", {"username": "jsmith"})], "tool_use"),
-        response([text("jsmith is locked out after 12 failed sign-ins.")], "end_turn"),
+        response([tool_use("t1", "get_user_status", {"username": "mgarcia"})], "tool_use"),
+        response([text("mgarcia's account is enabled and not locked.")], "end_turn"),
     ])
-    result = run_agent("jsmith can't sign in", tools, client=client, model="fake")
+    result = run_agent("mgarcia can't sign in", tools, client=client, model="fake")
     assert [c.name for c in result.tool_calls] == ["get_user_status"]
     assert "T00123456789" not in result.answer
     sent = client.requests[-1]["messages"]
@@ -130,3 +130,49 @@ def test_agent_stops_at_step_limit(tools):
     looping = [response([tool_use(f"t{i}", "search_knowledge_base", {"query": "vpn"})], "tool_use") for i in range(3)]
     result = run_agent("vpn broken", tools, client=FakeClient(looping), model="fake", max_steps=3)
     assert result.stopped_early and len(result.tool_calls) == 3
+
+
+def test_unverified_claims_are_replaced_with_guidance(tools):
+    fake_answer = "jsmith's account is locked. Ticket ID: 1234567890"
+    client = FakeClient([response([text(fake_answer)], "end_turn"), response([text(fake_answer)], "end_turn")])
+    result = run_agent("jsmith can't sign in", tools, client=client, model="fake")
+    assert "1234567890" not in result.answer
+    assert "tool calling" in result.answer
+    assert result.unverified_answer == fake_answer
+
+
+def test_review_catches_invented_ticket_and_missing_security_escalation(tools):
+    client = FakeClient([
+        response([tool_use("t1", "get_user_status", {"username": "jsmith"})], "tool_use"),
+        response([text("Unlock the account. -ticket created: #456789")], "end_turn"),
+        response([tool_use("t2", "create_ticket", {
+            "summary": "jsmith: 12 failed sign-ins", "details": "Possible password attack.",
+            "priority": "high", "queue": "Security"})], "tool_use"),
+        response([text("Possible password attack on your account. Security ticket TCK-1001 is open.")], "end_turn"),
+    ])
+    result = run_agent("jsmith can't sign in", tools, client=client, model="fake")
+
+    reviews = [m["content"] for m in client.requests[-1]["messages"]
+               if m["role"] == "user" and isinstance(m["content"], str) and m["content"].startswith("Before this answer")]
+    assert len(reviews) == 1 and "made up" in reviews[0] and "queue Security" in reviews[0]
+    assert tools.tickets[0]["queue"] == "Security"
+    assert "TCK-1001" in result.answer and result.review_notes == []
+
+
+def test_invented_ticket_is_removed_if_model_never_fixes_it(tools):
+    stubborn = response([text("All set. Ticket #456789.")], "end_turn")
+    client = FakeClient([
+        response([tool_use("t1", "get_device_compliance", {"username": "mgarcia"})], "tool_use"),
+        stubborn, stubborn, stubborn,
+    ])
+    result = run_agent("mgarcia email broken", tools, client=client, model="fake")
+    assert "456789" not in result.answer
+    assert "(no ticket was created)" in result.answer
+    assert result.review_notes
+
+
+def test_real_ticket_numbers_pass_review(tools):
+    tools.call("create_ticket", {"summary": "a", "details": "b", "priority": "low", "queue": "Tier 2"})
+    from agent.loop import ToolCall, review_answer
+    calls = [ToolCall("create_ticket", {"queue": "Tier 2"}, json.dumps({"created": True, "ticket_id": "TCK-1001", "queue": "Tier 2"}))]
+    assert review_answer("I opened ticket TCK-1001 for you.", calls) == []

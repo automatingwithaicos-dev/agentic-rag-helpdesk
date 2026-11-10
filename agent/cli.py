@@ -29,7 +29,16 @@ def _print_result(result, trace: bool) -> None:
             print(f"  step {i}: {call.name}({args})")
             print(f"          -> {preview}")
         print()
+    if trace and result.unverified_answer:
+        print("  What the model said (unverified, not shown to users):")
+        for line in result.unverified_answer.splitlines():
+            print(f"    | {line}")
+        print()
     print(result.answer)
+    if result.review_notes:
+        print("\n  Warning: the answer still breaks policy, so a technician should review it:")
+        for note in result.review_notes:
+            print(f"    - {note}")
 
 
 def main(argv: list[str] | None = None) -> None:
