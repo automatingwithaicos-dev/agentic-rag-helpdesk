@@ -1,0 +1,61 @@
+{
+  "users": {
+    "jsmith": {
+      "display_name": "Jordan Smith",
+      "department": "Finance",
+      "enabled": true,
+      "locked_out": true,
+      "failed_sign_ins_last_hour": 12,
+      "password_last_changed": "2026-11-03",
+      "mfa_methods": ["Microsoft Authenticator"],
+      "groups": ["Finance-Staff", "VPN-Users"],
+      "license": "Microsoft 365 Business Premium"
+    },
+    "mgarcia": {
+      "display_name": "Maria Garcia",
+      "department": "Sales",
+      "enabled": true,
+      "locked_out": false,
+      "failed_sign_ins_last_hour": 0,
+      "password_last_changed": "2026-09-14",
+      "mfa_methods": [],
+      "groups": ["Sales-Staff"],
+      "license": "Microsoft 365 Business Premium"
+    },
+    "tnguyen": {
+      "display_name": "Tam Nguyen",
+      "department": "Operations",
+      "enabled": true,
+      "locked_out": false,
+      "failed_sign_ins_last_hour": 0,
+      "password_last_changed": "2026-10-20",
+      "mfa_methods": ["Microsoft Authenticator", "Phone (SMS)"],
+      "groups": ["Ops-Staff", "VPN-Users"],
+      "license": "Microsoft 365 Business Premium"
+    },
+    "rpatel": {
+      "display_name": "Riya Patel",
+      "department": "HR",
+      "enabled": false,
+      "locked_out": false,
+      "failed_sign_ins_last_hour": 0,
+      "password_last_changed": "2026-08-01",
+      "mfa_methods": ["Microsoft Authenticator"],
+      "groups": [],
+      "license": null
+    }
+  },
+  "devices": {
+    "jsmith": [
+      {"name": "FIN-LT-0142", "os": "Windows 11", "compliant": true, "failing_policies": [], "last_check_in": "2026-11-10"}
+    ],
+    "mgarcia": [
+      {"name": "SLS-LT-0087", "os": "Windows 11", "compliant": false, "failing_policies": ["BitLocker not enabled"], "last_check_in": "2026-11-09"}
+    ],
+    "tnguyen": [
+      {"name": "OPS-LT-0031", "os": "Windows 11", "compliant": false, "failing_policies": ["Device has not checked in for more than 7 days"], "last_check_in": "2026-10-28"},
+      {"name": "OPS-MB-0004", "os": "macOS 15", "compliant": true, "failing_policies": [], "last_check_in": "2026-11-10"}
+    ],
+    "rpatel": []
+  }
+}
