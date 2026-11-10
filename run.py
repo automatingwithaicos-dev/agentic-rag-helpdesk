@@ -1,10 +1,10 @@
 """One script to set up and run the project. Works on Windows, Mac, and Linux.
 
-    python run.py setup                 install requirements and build the index
-    python run.py check                 test the connection to your model
-    python run.py ask "question"        run the agent on one request
-    python run.py chat                  talk to the agent interactively
-    python run.py rag "question"        plain RAG answer, no tools (for comparison)
+    uv run run.py setup                 build the knowledge base index
+    uv run run.py check                 test the connection to your model
+    uv run run.py ask "question"        run the agent on one request
+    uv run run.py chat                  talk to the agent interactively
+    uv run run.py rag "question"        plain RAG answer, no tools (for comparison)
 
 Settings live in config.ini. Edit that file instead of passing flags.
 """
@@ -14,7 +14,6 @@ from __future__ import annotations
 import configparser
 import json
 import os
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -44,10 +43,12 @@ def model_args(config: configparser.ConfigParser) -> list[str]:
 
 
 def setup(config: configparser.ConfigParser) -> None:
-    print("Installing requirements...")
-    subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(ROOT / "requirements.txt")], check=True)
+    try:
+        import numpy, sklearn  # noqa: F401  quick check that dependencies are installed
+    except ImportError:
+        sys.exit("Dependencies aren't installed. Run: uv sync")
     build_index(config)
-    print("\nSetup complete. Next: python run.py check")
+    print("\nSetup complete. Next: uv run run.py check")
 
 
 def build_index(config: configparser.ConfigParser) -> None:
@@ -76,7 +77,7 @@ def check(config: configparser.ConfigParser) -> None:
 
     if provider == "claude":
         if os.environ.get("ANTHROPIC_API_KEY"):
-            print("ANTHROPIC_API_KEY is set. You're ready: python run.py ask \"jsmith can't sign in\"")
+            print("ANTHROPIC_API_KEY is set. You're ready: uv run run.py ask \"jsmith can't sign in\"")
         else:
             print("provider = claude, but ANTHROPIC_API_KEY isn't set. Set it, or change provider to local in config.ini.")
         return
@@ -104,7 +105,7 @@ def check(config: configparser.ConfigParser) -> None:
         print(f"\nThe model in config.ini ('{model}') isn't in that list.")
         print("Copy one of the names above into the model line of config.ini.")
         sys.exit(1)
-    print(f"\nUsing '{model or names[0]}'. You're ready: python run.py ask \"jsmith can't sign in\"")
+    print(f"\nUsing '{model or names[0]}'. You're ready: uv run run.py ask \"jsmith can't sign in\"")
 
 
 def ask(config: configparser.ConfigParser, question: str | None) -> None:
@@ -142,16 +143,16 @@ def main() -> None:
         check(config)
     elif command == "ask":
         if not rest:
-            sys.exit('Add a question in quotes, for example: python run.py ask "jsmith can\'t sign in"')
+            sys.exit('Add a question in quotes, for example: uv run run.py ask "jsmith can\'t sign in"')
         ask(config, " ".join(rest))
     elif command == "chat":
         ask(config, None)
     elif command == "rag":
         if not rest:
-            sys.exit('Add a question in quotes, for example: python run.py rag "how do I clear stuck print jobs"')
+            sys.exit('Add a question in quotes, for example: uv run run.py rag "how do I clear stuck print jobs"')
         rag(config, " ".join(rest))
     else:
-        sys.exit(f"Unknown command '{command}'. Run: python run.py help")
+        sys.exit(f"Unknown command '{command}'. Run: uv run run.py help")
 
 
 if __name__ == "__main__":
