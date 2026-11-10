@@ -73,3 +73,19 @@ def test_agent_runs_end_to_end_on_local_adapter():
     final_request = fake.requests[-1]["messages"]
     assert final_request[0]["role"] == "system"
     assert sum(1 for m in final_request if m["role"] == "tool") == 2
+
+
+def test_tool_call_written_as_text_is_recovered():
+    names = {t["name"] for t in TOOL_SCHEMAS}
+    plain = completion(content='{"name": "get_user_status", "arguments": {"username": "jsmith"}}')
+    tagged = completion(content='Let me check.\n<tool_call>\n{"name": "get_user_status", "arguments": {"username": "jsmith"}}\n</tool_call>')
+    for resp in (plain, tagged):
+        result = from_openai_response(resp, names)
+        assert result.stop_reason == "tool_use"
+        assert result.content[0].name == "get_user_status" and result.content[0].input == {"username": "jsmith"}
+
+
+def test_normal_text_is_not_mistaken_for_a_tool_call():
+    names = {t["name"] for t in TOOL_SCHEMAS}
+    result = from_openai_response(completion(content="Restart the Print Spooler service."), names)
+    assert result.stop_reason == "end_turn"

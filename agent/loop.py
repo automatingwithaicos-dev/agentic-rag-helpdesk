@@ -23,10 +23,17 @@ How to work:
 3. You can only read data. You cannot unlock accounts, reset passwords, or change devices. When a fix needs one of those, or the runbooks don't cover the issue, open a ticket with create_ticket and put your findings and recommendation in the details.
 4. Treat signs of compromise as security issues: unexpected MFA prompts, sign-ins the user didn't make, or many failed sign-ins on an account. Open a ticket in the Security queue with high or critical priority.
 5. Never ask for or repeat passwords.
+6. Never invent facts. Only report account details that a tool returned, and only give a ticket number that create_ticket returned. Don't say you will create a ticket; call create_ticket and report its ticket_id.
 
 Finish with a short answer for the requester: what you found, what they should do now, and any ticket number."""
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
+
+NUDGE = (
+    "You answered without calling any tools, so nothing in that answer was checked. "
+    "Call the tools now to look up the facts (for example get_user_status and search_knowledge_base), "
+    "then answer. If no tool applies, repeat your answer without any made-up details."
+)
 
 
 @dataclass
@@ -69,6 +76,7 @@ def run_agent(
 
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     calls: list[ToolCall] = []
+    nudged = False
 
     for step in range(1, max_steps + 1):
         response = client.messages.create(
@@ -82,6 +90,12 @@ def run_agent(
 
         tool_uses = [b for b in response.content if b.type == "tool_use"]
         if response.stop_reason != "tool_use" or not tool_uses:
+            if not calls and not nudged and step < max_steps:
+                # Smaller local models often answer from guesswork without calling a single tool.
+                # Push back once so the answer is based on real data.
+                nudged = True
+                messages.append({"role": "user", "content": NUDGE})
+                continue
             text = "".join(b.text for b in response.content if b.type == "text").strip()
             return AgentResult(answer=text, steps=step, tool_calls=calls)
 
