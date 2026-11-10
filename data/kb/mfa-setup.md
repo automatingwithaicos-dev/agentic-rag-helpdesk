@@ -11,3 +11,6 @@ If the user still has the old phone, they can add the new phone from https://aka
 
 ## Unexpected MFA prompts
 If a user reports MFA approval requests they did not start, tell them to deny the request and treat it as a possible compromised password. Reset the password immediately, revoke all sessions in Entra ID, and escalate to security.
+
+## Users with no MFA registered
+An account with no MFA methods registered is a security gap, because a stolen password alone is enough to sign in. Whenever you notice it, tell the user and walk them through "Setting up MFA for a new user" above. If they can't finish setup that day, open a Tier 2 ticket so it gets followed up.

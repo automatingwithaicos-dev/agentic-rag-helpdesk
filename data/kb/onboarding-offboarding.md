@@ -13,3 +13,6 @@
 3. Remove the Microsoft 365 license after the mailbox is converted, so the data is kept.
 4. Wipe or retire their devices in Intune and collect the laptop, updating the asset tracker.
 5. Remove the user from all security groups and document every step in the ticket.
+
+## Disabled accounts
+A disabled account with no license and no group memberships almost always means the user was offboarded on purpose. Do not ask for the account to be re-enabled just because the user can't sign in. Confirm with the user's manager or HR first. If HR confirms the user is returning (a rehire or the end of a leave), open a Tier 2 ticket that names who approved it, so the account, license, and groups can be restored together.

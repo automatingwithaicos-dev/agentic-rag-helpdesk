@@ -6,23 +6,43 @@ It builds on [Embedding](https://github.com/automatingwithaicos-dev/Embedding), 
 
 ## Example
 
+A real run on `qwen2.5-7b-instruct`, a 7B model running locally in LM Studio:
+
 ```
-$ uv run run.py ask "jsmith says she can't sign in to anything" --trace
+> uv run run.py ask "jsmith can't sign in"
 
   step 1: get_user_status({"username": "jsmith"})
-          -> {"locked_out": true, "failed_sign_ins_last_hour": 12, "mfa_methods": ["Microsoft Authenticator"], ...}
-  step 2: search_knowledge_base({"query": "account lockout repeated failed sign-ins"})
-          -> {"passages": [{"source": "password-reset.md", ...}]}
-  step 3: create_ticket({"summary": "jsmith locked out after 12 failed sign-ins", "queue": "Security", "priority": "high", ...})
-          -> {"created": true, "ticket_id": "TCK-1001"}
+          -> {"username": "jsmith", "display_name": "Jordan Smith", "department": "Finance", "enabled": true,
+              "locked_out": true, "failed_sign_ins_last_hour": 12, "mfa_methods": ["Microsoft Authenticator"], ...}
+  step 2: search_knowledge_base({"query": "user account lockout troubleshooting"})
+          -> {"passages": [{"source": "password-reset.md", "title": "Password Reset and Account Lockout", "score": 0.762, ...}]}
+  step 3: create_ticket({"summary": "High Failed Sign-Ins on Account jsmith (Possible Compromise)", "priority": "high",
+              "queue": "Security", "details": "User jsmith has logged 12 failed sign-in attempts in the last hour. This
+              exceeds the typical threshold and may indicate a brute force or credential stuffing attempt. Account is
+              currently locked out. I recommend immediate review by the security team before any manual action (like
+              unlocking) is taken. ..."})
+          -> {"created": true, "ticket_id": "TCK-1001", "queue": "Security"}
 
-Your account is locked after 12 failed sign-ins in the last hour. That many attempts can come from an
-old password saved on a phone, but it can also be someone guessing your password, so I've opened
-TCK-1001 with Security. Until they follow up, update your password on any phone or tablet that syncs
-email (password-reset.md).
+Jordan Smith's account is currently locked out due to multiple failed sign-in attempts (12 in the last hour).
+
+Because of the high number of failed logins, I have opened a ticket with our Security team for immediate review
+as this could indicate an unauthorized attempt on your credentials: TCK-1001. They must review and authorize any
+action regarding account unlock or password resets.
+
+According to the runbook `password-reset.md`, repeated lockouts are often caused by old passwords saved on synced
+devices (like phones or laptops). Once Security clears this issue, please update your password across all personal
+devices that sync email. Do not attempt to sign in again until the Security team has reviewed ticket TCK-1001.
 ```
 
-The answer above illustrates the flow. The agent's exact wording varies from run to run.
+Other real runs on the same model:
+
+| Request | What the agent did |
+| --- | --- |
+| "mgarcia can't get email on her laptop" | Found her laptop noncompliant because BitLocker is off, cited `intune-enrollment.md`, and had her restart to start encryption. No ticket needed. |
+| "tnguyen's Windows laptop is blocked from Teams" | Picked the noncompliant laptop out of his two devices (no check-in for 7+ days) and walked him through a Company Portal sync. |
+| "rpatel can't log in" | Found the account disabled and opened a Tier 2 ticket, since it can't re-enable accounts itself. |
+
+Testing early versions on small local models is what shaped the guardrails below. One model faked its tool calls and invented ticket numbers, another recommended unlocking an account that looked compromised, and one run looped until it had opened 17 tickets. Each of those is now caught in code. Those runs also showed two gaps that are now fixed: the agent didn't mention that mgarcia has no MFA registered, and it didn't recognize that a disabled account with no license usually means rpatel was offboarded, which needs HR or manager approval before re-enabling.
 
 ## How it works
 
@@ -37,7 +57,7 @@ request ──► model decides ──► tool call ──► result back to mod
 
 - **Tool use loop** (`agent/loop.py`): the model receives the tool definitions and returns either a tool call or a final answer. Each tool result goes back to the model, matched to its call, until it answers or reaches the step limit.
 - **Read-only by design** (`agent/tools.py`): the agent can look but not touch. It can't unlock accounts, reset passwords, or wipe devices. When a fix needs a change, it opens a ticket with its findings and a recommendation, and a technician makes the change. That keeps a human in charge of anything risky.
-- **Guardrails in code, not just the prompt** (`review_answer` in `agent/loop.py`): small local models don't always follow instructions, so every answer is checked before it's shown. If the model mentions a ticket number that `create_ticket` never returned, or skips the Security escalation for an account with 10 or more failed sign-ins in an hour, the agent sends it back to fix the problem. Invented ticket numbers that survive are removed, and if the model answers without using any tools at all, the answer is withheld. Repeating the same tool call returns the earlier result, only one ticket can be opened per queue per request, and a cap on total tool calls stops a model that gets stuck in a loop.
+- **Guardrails in code, not just the prompt** (`review_answer` in `agent/loop.py`): small local models don't always follow instructions, so every answer is checked before it's shown. If the model mentions a ticket number that `create_ticket` never returned, or skips the Security escalation for an account with 10 or more failed sign-ins in an hour, doesn't mention an account with no MFA, or suggests re-enabling a disabled account without HR or manager approval, the agent sends it back to fix the problem. Invented ticket numbers that survive are removed, and if the model answers without using any tools at all, the answer is withheld. Repeating the same tool call returns the earlier result, only one ticket can be opened per queue per request, and a cap on total tool calls stops a model that gets stuck in a loop.
 - **Grounded in procedure**: the system prompt tells the agent to follow the runbooks and cite them by file name, and to send signs of compromise, like unexpected MFA prompts or many failed sign-ins, to the Security queue.
 - **Local or cloud model** (`agent/local_client.py`): an adapter translates between the OpenAI-compatible format that local servers use and the format the loop uses, so the same agent runs on Ollama, LM Studio, or the Claude API.
 - **Sample data** (`data/mock/directory.json`): four users and their devices stand in for Microsoft Graph and Intune, so the project runs anywhere. In production, each tool would call the real API with a least-privilege, read-only service account.

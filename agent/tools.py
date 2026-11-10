@@ -82,6 +82,8 @@ class HelpDeskTools:
         self.index = index
         self.directory = json.loads(Path(directory_path).read_text(encoding="utf-8"))
         self.tickets: list[dict[str, Any]] = []
+        self._seen_calls: dict[str, str] = {}
+        self._open_by_queue: dict[str, str] = {}
         self._handlers: dict[str, Callable[..., Any]] = {
             "search_knowledge_base": self.search_knowledge_base,
             "get_user_status": self.get_user_status,
@@ -89,15 +91,31 @@ class HelpDeskTools:
             "create_ticket": self.create_ticket,
         }
 
+    def start_request(self) -> None:
+        """Reset per-request state. Called by the agent at the start of each new request."""
+        self._seen_calls = {}
+        self._open_by_queue = {}
+
     def call(self, name: str, arguments: dict[str, Any]) -> str:
-        """Run a tool by name and return its result as a JSON string for the model."""
+        """Run a tool by name and return its result as a JSON string for the model.
+
+        Repeating the exact same call in one request returns the earlier result instead
+        of running it again, so a model stuck in a loop can't open duplicate tickets.
+        """
         handler = self._handlers.get(name)
         if handler is None:
             return json.dumps({"error": f"Unknown tool: {name}"})
+        key = f"{name}:{json.dumps(arguments, sort_keys=True)}"
+        if key in self._seen_calls:
+            earlier = json.loads(self._seen_calls[key])
+            earlier["note"] = "You already made this exact call. This is the earlier result. Don't repeat it; answer the user."
+            return json.dumps(earlier)
         try:
-            return json.dumps(handler(**arguments))
+            result = json.dumps(handler(**arguments))
         except TypeError as exc:
             return json.dumps({"error": f"Bad arguments for {name}: {exc}"})
+        self._seen_calls[key] = result
+        return result
 
     def search_knowledge_base(self, query: str, k: int = 3) -> dict[str, Any]:
         k = max(1, min(int(k), 5))
@@ -122,6 +140,14 @@ class HelpDeskTools:
         return {"username": username, "devices": self.directory["devices"].get(username, [])}
 
     def create_ticket(self, summary: str, details: str, priority: str, queue: str) -> dict[str, Any]:
+        existing = self._open_by_queue.get(queue)
+        if existing:
+            return {
+                "created": False,
+                "ticket_id": existing,
+                "queue": queue,
+                "note": f"{existing} is already open in the {queue} queue for this request. Don't create another; report {existing}.",
+            }
         ticket = {
             "id": f"TCK-{1001 + len(self.tickets)}",
             "summary": summary,
@@ -131,4 +157,5 @@ class HelpDeskTools:
             "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         self.tickets.append(ticket)
+        self._open_by_queue[queue] = ticket["id"]
         return {"created": True, "ticket_id": ticket["id"], "queue": queue}

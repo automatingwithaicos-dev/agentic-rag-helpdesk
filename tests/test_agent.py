@@ -107,10 +107,10 @@ def test_agent_investigates_then_escalates(tools):
 def test_agent_pushes_back_once_when_model_skips_tools(tools):
     client = FakeClient([
         response([text("jsmith is locked out. Ticket T00123456789.")], "end_turn"),
-        response([tool_use("t1", "get_user_status", {"username": "mgarcia"})], "tool_use"),
-        response([text("mgarcia's account is enabled and not locked.")], "end_turn"),
+        response([tool_use("t1", "get_user_status", {"username": "tnguyen"})], "tool_use"),
+        response([text("tnguyen's account is enabled and not locked.")], "end_turn"),
     ])
-    result = run_agent("mgarcia can't sign in", tools, client=client, model="fake")
+    result = run_agent("tnguyen can't sign in", tools, client=client, model="fake")
     assert [c.name for c in result.tool_calls] == ["get_user_status"]
     assert "T00123456789" not in result.answer
     sent = client.requests[-1]["messages"]
@@ -176,3 +176,63 @@ def test_real_ticket_numbers_pass_review(tools):
     from agent.loop import ToolCall, review_answer
     calls = [ToolCall("create_ticket", {"queue": "Tier 2"}, json.dumps({"created": True, "ticket_id": "TCK-1001", "queue": "Tier 2"}))]
     assert review_answer("I opened ticket TCK-1001 for you.", calls) == []
+
+
+def test_duplicate_tickets_are_blocked(tools):
+    args = {"summary": "jsmith attack", "details": "12 failed", "priority": "high", "queue": "Security"}
+    first = json.loads(tools.call("create_ticket", args))
+    again = json.loads(tools.call("create_ticket", args))
+    reworded = json.loads(tools.call("create_ticket", {**args, "summary": "jsmith possible attack"}))
+    assert first["ticket_id"] == again["ticket_id"] == reworded["ticket_id"] == "TCK-1001"
+    assert reworded["created"] is False and len(tools.tickets) == 1
+
+
+def test_new_request_can_open_a_new_ticket(tools):
+    args = {"summary": "a", "details": "b", "priority": "low", "queue": "Tier 2"}
+    tools.call("create_ticket", args)
+    tools.start_request()
+    assert json.loads(tools.call("create_ticket", args))["ticket_id"] == "TCK-1002"
+
+
+def test_looping_model_opens_one_ticket_and_stops(tools):
+    ticket = {"summary": "x", "details": "y", "priority": "high", "queue": "Security"}
+    loop = [response([tool_use(f"a{i}", "create_ticket", ticket), tool_use(f"b{i}", "create_ticket", ticket)], "tool_use")
+            for i in range(10)]
+    result = run_agent("jsmith can't sign in", tools, client=FakeClient(loop), model="fake", max_steps=10, max_tool_calls=6)
+    assert len(tools.tickets) == 1
+    assert result.stopped_early and len(result.tool_calls) <= 6
+    assert "TCK-1001" in result.answer
+
+
+def _review_messages(client):
+    return [m["content"] for m in client.requests[-1]["messages"]
+            if m["role"] == "user" and isinstance(m["content"], str) and m["content"].startswith("Before this answer")]
+
+
+def test_review_flags_missing_mfa(tools):
+    client = FakeClient([
+        response([tool_use("t1", "get_user_status", {"username": "mgarcia"})], "tool_use"),
+        response([text("Your account looks fine.")], "end_turn"),
+        response([text("Your account is fine, but you have no MFA set up. Here's how to add Microsoft Authenticator.")], "end_turn"),
+    ])
+    result = run_agent("mgarcia email issue", tools, client=client, model="fake")
+    assert "no MFA methods" in _review_messages(client)[0]
+    assert "MFA" in result.answer and result.review_notes == []
+
+
+def test_review_requires_manager_or_hr_for_disabled_account(tools):
+    client = FakeClient([
+        response([tool_use("t1", "get_user_status", {"username": "rpatel"})], "tool_use"),
+        response([text("Your account is disabled. Tier 2 will re-enable it.")], "end_turn"),
+        response([text("Your account is disabled, which usually means offboarding. Your manager or HR needs to confirm before it can be re-enabled.")], "end_turn"),
+    ])
+    result = run_agent("rpatel can't log in", tools, client=client, model="fake")
+    assert "offboarded" in _review_messages(client)[0]
+    assert "HR" in result.answer and result.review_notes == []
+
+
+def test_runbooks_cover_disabled_accounts_and_missing_mfa(tools):
+    disabled = json.loads(tools.call("search_knowledge_base", {"query": "disabled account offboarded re-enable", "k": 1}))
+    no_mfa = json.loads(tools.call("search_knowledge_base", {"query": "no MFA registered security gap", "k": 1}))
+    assert disabled["passages"][0]["source"] == "onboarding-offboarding.md"
+    assert no_mfa["passages"][0]["source"] == "mfa-setup.md"

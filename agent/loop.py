@@ -25,7 +25,9 @@ How to work:
 3. You can only read data. You cannot unlock accounts, reset passwords, or change devices. When a fix needs one of those, or the runbooks don't cover the issue, open a ticket with create_ticket and put your findings and recommendation in the details.
 4. Treat signs of compromise as security issues: unexpected MFA prompts, sign-ins the user didn't make, or many failed sign-ins on an account. Open a ticket in the Security queue with high or critical priority.
 5. Never ask for or repeat passwords.
-6. Never invent facts. Only report account details that a tool returned, and only give a ticket number that create_ticket returned. Don't say you will create a ticket; call create_ticket and report its ticket_id.
+6. Point out security gaps you see in tool results even if the user didn't ask, such as an account with no MFA methods registered.
+7. A disabled account usually means the user was offboarded. Never recommend re-enabling it without confirmation from the user's manager or HR.
+8. Never invent facts. Only report account details that a tool returned, and only give a ticket number that create_ticket returned. Don't say you will create a ticket; call create_ticket and report its ticket_id.
 
 Finish with a short answer for the requester: what you found, what they should do now, and any ticket number."""
 
@@ -99,10 +101,24 @@ def review_answer(text: str, calls: list[ToolCall]) -> list[str]:
             "If a ticket is needed, call create_ticket and report the ticket_id it returns. Otherwise remove the ticket number."
         )
     security_tickets = [t for t in _tickets_created(calls) if t.get("queue") == "Security"]
+    lowered = text.lower()
     for c in calls:
         if c.name != "get_user_status":
             continue
         status = json.loads(c.result)
+        name = status.get("username")
+        if status.get("mfa_methods") == [] and status.get("enabled", True) and "mfa" not in lowered \
+                and "multi-factor" not in lowered:
+            problems.append(
+                f"get_user_status shows {name} has no MFA methods registered. That's a security gap. "
+                "Tell the user and include the MFA setup steps from the runbook (search_knowledge_base 'MFA setup')."
+            )
+        if status.get("enabled") is False and not any(w in lowered for w in ("manager", "hr ", "hr.", "hr,", "human resources")):
+            problems.append(
+                f"{name}'s account is disabled, which usually means they were offboarded. Say that re-enabling "
+                "requires confirmation from their manager or HR (see onboarding-offboarding.md), and don't "
+                "recommend turning it back on without that approval."
+            )
         failed = status.get("failed_sign_ins_last_hour", 0) or 0
         if failed >= FAILED_SIGN_IN_THRESHOLD and not security_tickets:
             problems.append(
@@ -133,6 +149,7 @@ def run_agent(
     client: Any = None,
     model: str | None = None,
     max_steps: int = 8,
+    max_tool_calls: int = 12,
 ) -> AgentResult:
     """Run the tool-use loop until the model answers or max_steps is reached."""
     if client is None:
@@ -141,6 +158,8 @@ def run_agent(
         client = anthropic.Anthropic()
     model = model or os.environ.get("AGENT_MODEL", DEFAULT_MODEL)
 
+    if hasattr(tools, "start_request"):
+        tools.start_request()
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     calls: list[ToolCall] = []
     nudged = False
@@ -176,6 +195,8 @@ def run_agent(
             return AgentResult(answer=_remove_invented_tickets(text, calls), steps=step, tool_calls=calls,
                                review_notes=problems)
 
+        if len(calls) + len(tool_uses) > max_tool_calls:
+            break
         results = []
         for block in tool_uses:
             output = tools.call(block.name, block.input)
@@ -183,9 +204,11 @@ def run_agent(
             results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
         messages.append({"role": "user", "content": results})
 
+    opened = [t["ticket_id"] for t in _tickets_created(calls) if t.get("created")]
+    note = f" Tickets opened: {', '.join(opened)}." if opened else ""
     return AgentResult(
-        answer="I ran out of steps before finishing. Please open a ticket for Tier 2 with the details above.",
-        steps=max_steps,
+        answer="I ran out of steps before finishing." + note + " Please have a technician review this request.",
+        steps=step,
         tool_calls=calls,
         stopped_early=True,
     )
