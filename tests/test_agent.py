@@ -104,8 +104,24 @@ def test_agent_investigates_then_escalates(tools):
     assert "password-reset.md" in tool_results[1]["content"][0]["content"]
 
 
-def test_agent_answers_directly_without_tools(tools):
-    client = FakeClient([response([text("Hello! What can I help with?")], "end_turn")])
+def test_agent_pushes_back_once_when_model_skips_tools(tools):
+    client = FakeClient([
+        response([text("jsmith is locked out. Ticket T00123456789.")], "end_turn"),
+        response([tool_use("t1", "get_user_status", {"username": "jsmith"})], "tool_use"),
+        response([text("jsmith is locked out after 12 failed sign-ins.")], "end_turn"),
+    ])
+    result = run_agent("jsmith can't sign in", tools, client=client, model="fake")
+    assert [c.name for c in result.tool_calls] == ["get_user_status"]
+    assert "T00123456789" not in result.answer
+    sent = client.requests[-1]["messages"]
+    assert any(m["role"] == "user" and isinstance(m["content"], str) and "without calling any tools" in m["content"] for m in sent)
+
+
+def test_agent_can_still_answer_without_tools_after_one_push(tools):
+    client = FakeClient([
+        response([text("Hello! What can I help with?")], "end_turn"),
+        response([text("Hello! What can I help with?")], "end_turn"),
+    ])
     result = run_agent("hi", tools, client=client, model="fake")
     assert result.answer == "Hello! What can I help with?" and result.tool_calls == []
 

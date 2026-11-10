@@ -20,6 +20,8 @@ from .tools import DEFAULT_DIRECTORY, HelpDeskTools
 
 
 def _print_result(result, trace: bool) -> None:
+    if trace and not result.tool_calls:
+        print("  (the agent did not call any tools, so this answer was not checked against real data)\n")
     if trace:
         for i, call in enumerate(result.tool_calls, start=1):
             args = json.dumps(call.arguments)

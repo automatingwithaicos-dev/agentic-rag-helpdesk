@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -76,10 +77,44 @@ def _parse_arguments(raw: Any) -> dict[str, Any]:
         return {}
 
 
-def from_openai_response(response: Any) -> SimpleNamespace:
+_TOOL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+
+def parse_text_tool_calls(text: str, tool_names: set[str]) -> list[dict[str, Any]]:
+    """Find tool calls a model wrote as plain text instead of real tool calls.
+
+    Some local models print {"name": ..., "arguments": {...}} or wrap it in
+    <tool_call> tags when the server's chat template doesn't handle tools.
+    """
+    candidates = _TOOL_TAG.findall(text)
+    if not candidates:
+        stripped = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            candidates = [stripped]
+    found: list[dict[str, Any]] = []
+    for raw in candidates:
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        for item in data if isinstance(data, list) else [data]:
+            if isinstance(item, dict) and item.get("name") in tool_names:
+                args = item.get("arguments", item.get("parameters", {}))
+                found.append({"name": item["name"], "arguments": _parse_arguments(args)})
+    return found
+
+
+def from_openai_response(response: Any, tool_names: set[str] | None = None) -> SimpleNamespace:
     """Convert an OpenAI-style chat completion into Anthropic-style content blocks."""
     message = response.choices[0].message
     blocks: list[SimpleNamespace] = []
+    text_calls = []
+    if message.content and not message.tool_calls and tool_names:
+        text_calls = parse_text_tool_calls(message.content, tool_names)
+    if text_calls:
+        for i, call in enumerate(text_calls):
+            blocks.append(SimpleNamespace(type="tool_use", id=f"text_call_{i}", name=call["name"], input=call["arguments"]))
+        return SimpleNamespace(content=blocks, stop_reason="tool_use")
     if message.content:
         blocks.append(SimpleNamespace(type="text", text=message.content))
     for i, call in enumerate(message.tool_calls or []):
@@ -116,4 +151,4 @@ class LocalModelClient:
             messages=to_openai_messages(system, messages),
             tools=to_openai_tools(tools),
         )
-        return from_openai_response(response)
+        return from_openai_response(response, {t["name"] for t in tools})
