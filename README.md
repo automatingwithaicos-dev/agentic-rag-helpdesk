@@ -43,40 +43,46 @@ request ──► model decides ──► tool call ──► result back to mod
 
 ## Quick start
 
-The agent runs on a **local model by default**, so it needs no API key and no data leaves your machine. Any OpenAI-compatible local server works: Ollama, LM Studio, llama.cpp, or vLLM.
+You need Python 3.10 or newer and, for local use, Ollama or LM Studio running a model that supports tool calling (qwen2.5, llama3.1, or mistral-nemo). No API key is needed.
+
+## What to change before you run it
+
+Open `config.ini` in any text editor. Every setting has a comment above it. Most people only change the first three:
+
+| Setting | What to put there |
+| --- | --- |
+| `provider` | `local` for a model on your machine, `claude` for the Claude API |
+| `base_url` | Ollama: `http://localhost:11434/v1`. LM Studio: `http://localhost:1234/v1` |
+| `model` | Your model's name exactly as your server lists it. `python run.py check` prints the names |
+| `docs` | The folder of runbooks to search. Change it to use your own `.md` or `.txt` files |
+| `embedding` | `fastembed` for semantic search (one-time 70 MB download) or `tfidf` for keyword search |
+| `max_steps` | Most tool calls the agent can make before it stops and suggests a ticket |
+| `trace` | `true` shows every tool call the agent makes |
+
+Then run these from the project folder:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
 
-python -m rag ingest             # build the knowledge base index
+python run.py setup                # install requirements and build the knowledge base index
+python run.py check                # confirm your model server is running and the model name matches
+python run.py ask "jsmith can't sign in"
+python run.py chat                 # interactive mode
+python run.py rag "how do I clear stuck print jobs"   # plain RAG with no tools, for comparison
 ```
 
-**Local model with Ollama (default):**
+If you change `docs` or `embedding`, delete the `index` folder so it rebuilds on the next run.
+
+To use the Claude API instead, set `provider = claude` in `config.ini` and set your key:
 
 ```bash
-ollama pull qwen2.5:7b           # any model with tool calling works: qwen2.5, llama3.1, mistral-nemo
-python -m agent ask "mgarcia can't get email on her laptop" --trace
-python -m agent chat --trace
+export ANTHROPIC_API_KEY=your-key       # Windows PowerShell: $env:ANTHROPIC_API_KEY="your-key"
 ```
 
-**Local model with LM Studio:** load a tool-calling model, start the server, then:
+Smaller local models (7B to 8B) handle the simple cases but sometimes skip a step or pick the wrong tool. A 14B model or larger follows the runbooks more reliably. With `trace = true` you can see exactly what the agent did, which makes it easy to compare models.
 
-```bash
-python -m agent ask "jsmith can't sign in" --trace --base-url http://localhost:1234/v1 --model <model name in LM Studio>
-```
-
-**Claude API instead:**
-
-```bash
-export ANTHROPIC_API_KEY=your-key
-python -m agent ask "jsmith can't sign in" --trace --provider claude
-```
-
-Smaller local models (7B to 8B) handle the simple cases well but sometimes skip a step or pick the wrong tool. A 14B model or larger follows the runbooks more reliably. The `--trace` flag shows exactly what the agent did, which makes it easy to compare models.
-
-Try these with the sample users:
+Try these requests with the sample users:
 
 | Request | What the agent should find |
 | --- | --- |
@@ -97,6 +103,8 @@ The agent tests use a scripted fake model, so they run offline with no API key o
 ## Project layout
 
 ```
+run.py          one script to set up and run everything
+config.ini      your settings: model, server, documents
 agent/
   tools.py      tool definitions and read-only implementations
   loop.py       tool-use loop, system prompt, audit trail
