@@ -25,9 +25,11 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     print(f"Indexed {len(chunks)} chunks from {sources} documents with '{args.backend}' into {args.index}/")
 
 
-def _ask(index: VectorIndex, question: str, k: int, show_sources: bool) -> None:
+def _ask(index: VectorIndex, question: str, args: argparse.Namespace) -> None:
+    k, show_sources = args.k, args.sources
     results = index.search(question, k=k)
-    print(answer(question, results, backend=index.embedder.name))
+    print(answer(question, results, backend=index.embedder.name,
+                 provider=args.provider, model=args.model, base_url=args.base_url))
     if show_sources:
         print("\nSources:")
         for chunk, score in results:
@@ -35,7 +37,7 @@ def _ask(index: VectorIndex, question: str, k: int, show_sources: bool) -> None:
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
-    _ask(VectorIndex.load(args.index), args.question, args.k, args.sources)
+    _ask(VectorIndex.load(args.index), args.question, args)
 
 
 def cmd_chat(args: argparse.Namespace) -> None:
@@ -49,7 +51,7 @@ def cmd_chat(args: argparse.Namespace) -> None:
         if question.lower() in {"quit", "exit", "q"}:
             break
         if question:
-            _ask(index, question, args.k, args.sources)
+            _ask(index, question, args)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -71,6 +73,10 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--index", default=DEFAULT_INDEX)
         p.add_argument("-k", type=int, default=3, help="Number of passages to retrieve")
         p.add_argument("--sources", action="store_true", help="Show retrieved sources and scores")
+        p.add_argument("--provider", choices=["local", "claude", "none"],
+                       help="local = Ollama/LM Studio, claude = Claude API, none = show passages only")
+        p.add_argument("--model", help="Model name, for example qwen2.5:7b for Ollama")
+        p.add_argument("--base-url", help="Local server URL (default Ollama: http://localhost:11434/v1)")
         p.set_defaults(func=func)
 
     args = parser.parse_args(argv)

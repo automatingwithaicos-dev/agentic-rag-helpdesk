@@ -1,8 +1,11 @@
 """Turn retrieved chunks into an answer.
 
-If ANTHROPIC_API_KEY is set, Claude writes the answer using only the
-retrieved context and cites its sources. Without a key, the tool falls
-back to showing the best-matching passages, so it still works offline.
+A model writes the answer using only the retrieved context and cites its
+sources. Two options:
+  - provider "local": a model on your own machine through Ollama, LM Studio,
+    or any OpenAI-compatible server. No API key, nothing leaves the machine.
+  - provider "claude": the Claude API, used when ANTHROPIC_API_KEY is set.
+With neither, the tool shows the best-matching passages, so it still works.
 """
 
 from __future__ import annotations
@@ -34,7 +37,7 @@ def build_prompt(question: str, results: list[tuple[Chunk, float]]) -> str:
 def extractive_answer(question: str, results: list[tuple[Chunk, float]], min_score: float = 0.15) -> str:
     if not results or results[0][1] < min_score:
         return "I couldn't find this in the knowledge base. Please open a ticket for Tier 2."
-    lines = ["Best matching passages (set ANTHROPIC_API_KEY for a written answer):", ""]
+    lines = ["Best matching passages (use --provider local or claude for a written answer):", ""]
     for i, (chunk, score) in enumerate(results, start=1):
         lines.append(f"[{i}] {chunk.title} ({chunk.source}, score {score:.2f})")
         lines.append(f"    {chunk.text}")
@@ -55,10 +58,38 @@ def llm_answer(question: str, results: list[tuple[Chunk, float]], model: str | N
     return "".join(block.text for block in response.content if block.type == "text")
 
 
-def answer(question: str, results: list[tuple[Chunk, float]], backend: str = "tfidf") -> str:
+def local_answer(question: str, results: list[tuple[Chunk, float]], model: str | None = None,
+                 base_url: str | None = None) -> str:
+    from openai import OpenAI
+
+    client = OpenAI(
+        base_url=base_url or os.environ.get("LOCAL_BASE_URL", "http://localhost:11434/v1"),
+        api_key="local",
+    )
+    response = client.chat.completions.create(
+        model=model or os.environ.get("LOCAL_MODEL", "qwen2.5:7b"),
+        max_tokens=600,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": build_prompt(question, results)},
+        ],
+    )
+    return response.choices[0].message.content or ""
+
+
+def answer(question: str, results: list[tuple[Chunk, float]], backend: str = "tfidf",
+           provider: str | None = None, model: str | None = None, base_url: str | None = None) -> str:
+    """Answer from the retrieved passages.
+
+    provider is "local", "claude", or "none". If not given, RAG_PROVIDER is used,
+    then Claude if ANTHROPIC_API_KEY is set, otherwise the passages are shown.
+    """
     min_score = MIN_SCORES.get(backend, 0.15)
     if not results or results[0][1] < min_score:
         return extractive_answer(question, results, min_score)
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return llm_answer(question, results)
+    provider = provider or os.environ.get("RAG_PROVIDER") or ("claude" if os.environ.get("ANTHROPIC_API_KEY") else "none")
+    if provider == "local":
+        return local_answer(question, results, model, base_url)
+    if provider == "claude":
+        return llm_answer(question, results, model)
     return extractive_answer(question, results, min_score)
