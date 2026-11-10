@@ -9,7 +9,9 @@ limit, and records every tool call so a technician can audit what it did.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,12 +45,22 @@ class ToolCall:
     result: str
 
 
+UNVERIFIED = (
+    "The model answered without using any tools, so its answer couldn't be checked and was not shown. "
+    "This usually means the model doesn't support tool calling. Pick a model with tool support "
+    "(in LM Studio, look for the tool-use badge; for example Qwen2.5 7B Instruct or Llama 3.1 8B Instruct), "
+    "put its name in config.ini, and try again."
+)
+
+
 @dataclass
 class AgentResult:
     answer: str
     steps: int
     tool_calls: list[ToolCall] = field(default_factory=list)
     stopped_early: bool = False
+    unverified_answer: str | None = None  # what the model said when it refused to use tools
+    review_notes: list[str] = field(default_factory=list)  # policy problems the model never fixed
 
 
 def _to_param(block: Any) -> dict[str, Any]:
@@ -58,6 +70,61 @@ def _to_param(block: Any) -> dict[str, Any]:
     if block.type == "tool_use":
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": block.input}
     raise ValueError(f"Unexpected content block type: {block.type}")
+
+
+FAILED_SIGN_IN_THRESHOLD = 10
+_TICKET_CLAIM = re.compile(r"(ticket[^\n]{0,25}?|#)\s*([A-Z]{1,4}-?)?\d{3,}", re.IGNORECASE)
+
+
+def _tickets_created(calls: list[ToolCall]) -> list[dict[str, Any]]:
+    return [{**c.arguments, **json.loads(c.result)} for c in calls if c.name == "create_ticket"]
+
+
+def _invented_ticket_numbers(text: str, calls: list[ToolCall]) -> list[str]:
+    """Ticket numbers in the answer that create_ticket never returned."""
+    real = {t.get("ticket_id") for t in _tickets_created(calls)}
+    claims = [m.group(0) for m in _TICKET_CLAIM.finditer(text)]
+    return [c for c in claims if not any(r and r in c for r in real)]
+
+
+def review_answer(text: str, calls: list[ToolCall]) -> list[str]:
+    """Policy checks run in code, because small models don't always follow the prompt.
+
+    Returns a list of problems to send back to the model. Empty means the answer passes.
+    """
+    problems = []
+    if _invented_ticket_numbers(text, calls):
+        problems.append(
+            "Your answer mentions a ticket number, but you never called create_ticket, so that number is made up. "
+            "If a ticket is needed, call create_ticket and report the ticket_id it returns. Otherwise remove the ticket number."
+        )
+    security_tickets = [t for t in _tickets_created(calls) if t.get("queue") == "Security"]
+    for c in calls:
+        if c.name != "get_user_status":
+            continue
+        status = json.loads(c.result)
+        failed = status.get("failed_sign_ins_last_hour", 0) or 0
+        if failed >= FAILED_SIGN_IN_THRESHOLD and not security_tickets:
+            problems.append(
+                f"get_user_status shows {failed} failed sign-ins in the last hour for {status.get('username')}. "
+                f"Policy treats {FAILED_SIGN_IN_THRESHOLD} or more as a possible password attack. Call create_ticket "
+                "with queue Security and priority high before answering, and do not recommend unlocking the account "
+                "until Security has reviewed it."
+            )
+    return problems
+
+
+def _remove_invented_tickets(text: str, calls: list[ToolCall]) -> str:
+    for claim in _invented_ticket_numbers(text, calls):
+        text = text.replace(claim, "(no ticket was created)")
+    return text
+
+
+def _looks_like_a_claim(text: str) -> bool:
+    """True if a tool-less answer states facts it could only know from a tool."""
+    lowered = text.lower()
+    markers = ("ticket", "locked", "account", "device", "compliant", "mfa", "status", "```")
+    return any(m in lowered for m in markers)
 
 
 def run_agent(
@@ -77,6 +144,7 @@ def run_agent(
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     calls: list[ToolCall] = []
     nudged = False
+    reviews_left = 2
 
     for step in range(1, max_steps + 1):
         response = client.messages.create(
@@ -97,7 +165,16 @@ def run_agent(
                 messages.append({"role": "user", "content": NUDGE})
                 continue
             text = "".join(b.text for b in response.content if b.type == "text").strip()
-            return AgentResult(answer=text, steps=step, tool_calls=calls)
+            if not calls and nudged and _looks_like_a_claim(text):
+                return AgentResult(answer=UNVERIFIED, steps=step, unverified_answer=text)
+            problems = review_answer(text, calls)
+            if problems and reviews_left > 0 and step < max_steps:
+                reviews_left -= 1
+                review = "Before this answer goes to the user, fix these problems:\n- " + "\n- ".join(problems)
+                messages.append({"role": "user", "content": review})
+                continue
+            return AgentResult(answer=_remove_invented_tickets(text, calls), steps=step, tool_calls=calls,
+                               review_notes=problems)
 
         results = []
         for block in tool_uses:
